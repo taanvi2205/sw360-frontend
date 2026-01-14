@@ -19,8 +19,10 @@ import { useTranslations } from 'next-intl'
 import { AdvancedSearch, Breadcrumb, PageSizeSelector, SW360Table, TableFooter } from 'next-sw360'
 import { type JSX, useEffect, useMemo, useState } from 'react'
 import { Dropdown, OverlayTrigger, Spinner, Tooltip } from 'react-bootstrap'
-import { BsCheck2Square, BsClipboard, BsFillTrashFill, BsPencil } from 'react-icons/bs'
-import LicenseClearing from '@/components/LicenseClearing'
+import { FaPencilAlt } from 'react-icons/fa'
+import { IoMdClipboard } from 'react-icons/io'
+import { MdDeleteOutline, MdOutlineTask } from 'react-icons/md'
+import LicenseClearing, { type LicenseClearingData } from '@/components/LicenseClearing'
 import { useConfigValue } from '@/contexts'
 import {
     Embedded,
@@ -33,6 +35,7 @@ import {
 } from '@/object-types'
 import MessageService from '@/services/message.service'
 import { ApiUtils, CommonUtils } from '@/utils'
+import { SW360_API_URL } from '@/utils/env'
 import ImportSBOMMetadata from '../../../../object-types/cyclonedx/ImportSBOMMetadata'
 import CreateClearingRequestModal from '../detail/[id]/components/CreateClearingRequestModal'
 import ViewClearingRequestModal from '../detail/[id]/components/ViewClearingRequestModal'
@@ -40,6 +43,8 @@ import DeleteProjectDialog from './DeleteProjectDialog'
 import ImportSBOMModal from './ImportSBOMModal'
 
 type EmbeddedProjects = Embedded<TypeProject, 'sw360:projects'>
+
+type LicenseClearingMap = Record<string, LicenseClearingData>
 
 const Capitalize = (text: string) =>
     text.split('_').reduce((s, c) => s + ' ' + (c.charAt(0) + c.substring(1).toLocaleLowerCase()), '')
@@ -66,6 +71,7 @@ function Project(): JSX.Element {
 
     const [showViewCRModal, setShowViewCRModal] = useState(false)
     const [clearingRequestId, setClearingRequestId] = useState('')
+    const [licenseClearingData, setLicenseClearingData] = useState<LicenseClearingMap>({})
 
     useEffect(() => {
         if (status === 'unauthenticated') {
@@ -193,7 +199,16 @@ function Project(): JSX.Element {
                 enableSorting: false,
                 cell: ({ row }) => {
                     const id = row.original['_links']['self']['href'].split('/').at(-1)
-                    return <>{id && <LicenseClearing projectId={id} />}</>
+                    return (
+                        <>
+                            {id && (
+                                <LicenseClearing
+                                    projectId={id}
+                                    data={licenseClearingData[id]}
+                                />
+                            )}
+                        </>
+                    )
                 },
                 meta: {
                     width: '10%',
@@ -223,10 +238,7 @@ function Project(): JSX.Element {
                                             className='d-inline-block'
                                             onClick={() => handleEditProject(id)}
                                         >
-                                            <BsPencil
-                                                className='btn-icon'
-                                                size={20}
-                                            />
+                                            <FaPencilAlt className='btn-icon' />
                                         </span>
                                     </OverlayTrigger>
                                     {projectClearingRequestId && projectClearingRequestId !== '' ? (
@@ -238,8 +250,8 @@ function Project(): JSX.Element {
                                                     setShowViewCRModal(true)
                                                 }}
                                             >
-                                                <BsCheck2Square
-                                                    size={20}
+                                                <MdOutlineTask
+                                                    size={25}
                                                     className={`btn-icon overlay-trigger ${isOpenClearingRequest ? 'cr-icon-highlighted' : ''}`}
                                                 />
                                             </span>
@@ -253,8 +265,8 @@ function Project(): JSX.Element {
                                                     setShowCreateCRModal(true)
                                                 }}
                                             >
-                                                <BsCheck2Square
-                                                    size={20}
+                                                <MdOutlineTask
+                                                    size={25}
                                                     className='btn-icon overlay-trigger'
                                                 />
                                             </span>
@@ -270,8 +282,8 @@ function Project(): JSX.Element {
                                             }
                                         >
                                             <span className={'d-inline-block'}>
-                                                <BsCheck2Square
-                                                    size={20}
+                                                <MdOutlineTask
+                                                    size={25}
                                                     className='btn-icon overlay-trigger'
                                                 />
                                             </span>
@@ -282,18 +294,18 @@ function Project(): JSX.Element {
                                             href={`/projects/duplicate/${id}`}
                                             className='overlay-trigger'
                                         >
-                                            <BsClipboard
-                                                className='btn-icon mt-0'
-                                                size={20}
+                                            <IoMdClipboard
+                                                className='btn-icon'
+                                                size={25}
                                             />
                                         </Link>
                                     </OverlayTrigger>
 
                                     <OverlayTrigger overlay={<Tooltip>{t('Delete')}</Tooltip>}>
                                         <span className='d-inline-block'>
-                                            <BsFillTrashFill
+                                            <MdDeleteOutline
                                                 className='btn-icon'
-                                                size={20}
+                                                size={25}
                                                 onClick={() => handleDeleteProject(id)}
                                             />
                                         </span>
@@ -310,6 +322,7 @@ function Project(): JSX.Element {
         ],
         [
             t,
+            licenseClearingData,
         ],
     )
     const [pageableQueryParam, setPageableQueryParam] = useState<PageableQueryParam>({
@@ -388,6 +401,57 @@ function Project(): JSX.Element {
     }, [
         pageableQueryParam,
         params.toString(),
+    ])
+
+    useEffect(() => {
+        if (projectData.length === 0) {
+            setLicenseClearingData({})
+            return
+        }
+
+        const controller = new AbortController()
+        const signal = controller.signal
+
+        void (async () => {
+            try {
+                const session = await getSession()
+                if (CommonUtils.isNullOrUndefined(session)) return signOut()
+
+                const projectIds = projectData
+                    .map((project) => project['_links']['self']['href'].split('/').at(-1))
+                    .filter((id): id is string => id !== undefined)
+
+                if (projectIds.length === 0) return
+
+                const response = await fetch(`${SW360_API_URL}/resource/api/projects/licenseClearingCount`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: session.user.access_token,
+                    },
+                    body: JSON.stringify(projectIds),
+                    signal,
+                })
+
+                if (response.status !== StatusCodes.OK) {
+                    const err = (await response.json()) as ErrorDetails
+                    throw new Error(err.message)
+                }
+
+                const data = (await response.json()) as LicenseClearingMap
+                setLicenseClearingData(data)
+            } catch (error) {
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    return
+                }
+                const message = error instanceof Error ? error.message : String(error)
+                MessageService.error(message)
+            }
+        })()
+
+        return () => controller.abort()
+    }, [
+        projectData,
     ])
 
     useEffect(() => {
